@@ -1,60 +1,159 @@
-# Product Finder
+# ListingLens
 
-> **Status:** Rebuild specification · **Phase:** MVP planning · **Cost target:** €0/month
+> **Status:** In development · **Current milestone:** FastAPI foundation and RSS ingestion · **Budget:** €0/month
 
-Product Finder is an RSS-first marketplace monitoring application. It periodically ingests listings from HardverApró, preserves their original metadata, identifies new listings matching configurable watch rules, and sends one email per newly matched listing. Later phases add full-page extraction, structured hardware-specification enrichment, a FastAPI API, and a React/TypeScript listing browser.
+ListingLens is an RSS-first marketplace monitor. It ingests HardverApró listings, preserves original metadata, detects new listings matching configurable watches, and sends email alerts. Future phases introduce listing verification, hardware-specification enrichment with Ollama, and a React listing browser. The initial target is an RTX 4070 Ti SUPER, but watches and sources are not hardcoded.
 
-The initial use case is finding an **NVIDIA RTX 4070 Ti SUPER** at an attractive price, but product names, RSS feeds, and matching rules must be configurable rather than hardcoded.
+## 1. Goals and scope
 
-## 1. Goals
+**MVP requirements**
 
-- Monitor one or more user-supplied HardverApró RSS URLs approximately once per hour.
-- Store all available RSS entry fields, the raw feed-entry representation, provenance, and discovery timestamps in hosted PostgreSQL.
-- Identify listings using stable source-specific IDs where available; otherwise use normalized canonical URLs with a documented fallback.
-- Support case-insensitive include/exclude keyword rules and optional minimum/maximum price thresholds in HUF.
-- Send an email for each **new listing/watch-rule match**, at most once under normal retries; record delivery attempts and errors.
-- Track price changes and feed appearances without overwriting historical evidence.
-- Distinguish absence from an RSS feed from actual listing archival.
-- Run the same ingestion command locally and in GitHub Actions.
-- Design source adapters so other marketplaces can be added later.
+- Monitor one or more user-supplied RSS feeds approximately hourly, locally or via GitHub Actions.
+- Normalize listings, retain raw feed data, and upsert without duplicates.
+- Match configurable case-insensitive include/exclude keywords and optional HUF price bounds.
+- Send one notification intent per newly matched `(listing, watch)` pair, with durable retry records.
+- Preserve price changes, observation timestamps, and feed-specific appearances.
+- Never infer that a listing was sold or archived solely because it disappeared from a rolling RSS feed.
+- Build a small FastAPI backend now, initially with health and read-only listing endpoints.
+- Keep source-specific behavior behind adapters so other marketplaces can be added.
 
-### Non-goals for MVP
+**Out of scope for the initial release:** full-page scraping, Ollama enrichment, React frontend, multi-user authentication, purchasing, and guaranteed exact-hour delivery. API scaffolding is in scope; a publicly deployed API is not.
 
-- No page scraping, browser automation, Scrapy, Ollama, public API, or frontend.
-- No proof that a listing is sold or archived based solely on feed disappearance.
-- No multi-user authentication, instant push delivery, or guaranteed exact-hour scheduling.
-- No automatic purchasing, bidding, or messaging sellers.
+## 2. Technology decisions
 
-## 2. Proposed stack
-
-| Concern | MVP | Later |
+| Layer | Choice | Reason |
 |---|---|---|
-| Language | Current supported Python 3.x (pin version in `.python-version`) | Same |
-| Package management | `uv` / `pyproject.toml` / committed lockfile | Same |
-| HTTP / RSS | `httpx`, `feedparser` (verify feed behavior) | Per-source adapters |
-| Models / config | Pydantic v2, `pydantic-settings` | Same |
-| Persistence | PostgreSQL, SQLAlchemy 2.x, Alembic, `psycopg` | Same |
-| Email | Standard library `smtplib` + `email.message` | Provider adapter if needed |
-| Scheduling | GitHub Actions cron + manual dispatch | Worker/scheduler if needed |
-| Quality | Ruff, pytest, type hints, CI | Same |
-| API | Not in MVP | FastAPI |
-| Frontend | Not in MVP | React + TypeScript + Vite |
-| Enrichment | Not in MVP | Ollama + validated structured output |
-| Containers | Optional for local PostgreSQL | Useful for API/worker deployment |
+| Python | Modern supported Python 3.x, pinned in `.python-version` | Consistent environments |
+| Dependencies | `uv`, `pyproject.toml`, `uv.lock` | Fast reproducible installs |
+| API | FastAPI, Uvicorn | Typed HTTP interface |
+| Validation | Pydantic v2, `pydantic-settings` | Separate input/output contracts and environment settings |
+| Database | PostgreSQL locally in Docker Compose; Neon later | Same SQL dialect in development and production |
+| ORM and migrations | SQLAlchemy 2.x, Alembic, `psycopg` | Typed persistence and schema evolution |
+| RSS | `httpx`, `feedparser` | HTTP retrieval and feed parsing |
+| CLI | Typer | Reuse ingestion independently of FastAPI |
+| Email | `smtplib`, `email.message` | No unnecessary dependency |
+| Quality | Ruff, pytest, type hints | Practical engineering rigor |
+| Scheduling | GitHub Actions cron and manual dispatch | Free, simple scheduled execution |
+| Later | Ollama, React + TypeScript + Vite | Enrichment and browsing |
 
-**Database choice:** Start with Neon hosted PostgreSQL if its free plan remains suitable. Keep database access standard PostgreSQL so switching providers does not require rewriting application logic. Use environment variables for credentials, never committed secrets.
+Use **synchronous SQLAlchemy sessions initially** for simplicity. Database session handling must not depend on FastAPI so CLI ingestion can reuse it. Never commit database credentials; local `.env` and CI secrets provide them.
 
-## 3. User configuration
+## 3. Target repository structure
 
-MVP configuration is file-based (e.g. `config/watches.yaml`), validated with Pydantic. A watch has a stable identifier, name, enabled flag, RSS feed reference, include/exclude terms, optional HUF price bounds, and destination email reference. Avoid putting credentials in this file.
+The comments describe the purpose of each file or directory. This is a **target layout**, not a claim that every file already exists. Create files as the corresponding feature is implemented.
 
-Example (illustrative; URL must be replaced with a real HardverApró RSS feed):
+```text
+ListingLens/
+├── README.md                           # Project specification, setup, and roadmap
+├── pyproject.toml                      # Python dependencies and tool configuration
+├── uv.lock                             # Locked Python dependency versions
+├── .python-version                     # Local Python version pin
+├── .env.example                        # Documented environment variable names, no secrets
+├── .gitignore                          # Ignore local secrets, caches, databases, and exports
+├── compose.yaml                        # Local PostgreSQL development service
+├── Dockerfile                          # Optional future container image for API/worker
+├── alembic.ini                         # Alembic migration configuration
+├── alembic/                            # Version-controlled database schema migrations
+│   ├── env.py                          # Connect migrations to settings and SQLAlchemy metadata
+│   └── versions/                       # Individual database migration scripts
+├── config/
+│   └── watches.example.yaml            # Example RSS feed and watch definitions
+├── src/
+│   └── listinglens/
+│       ├── __init__.py                  # Python package marker
+│       ├── main.py                      # FastAPI app creation and router registration
+│       ├── cli.py                       # Commands for local and scheduled ingestion
+│       ├── core/
+│       │   ├── __init__.py              # Core package marker
+│       │   └── config.py               # Environment-based application settings
+│       ├── db/
+│       │   ├── __init__.py              # Database package marker
+│       │   ├── base.py                  # Declarative Base and model metadata imports
+│       │   └── session.py               # Engine, session factory, and session lifecycle
+│       ├── models/
+│       │   ├── __init__.py              # Register SQLAlchemy models for Alembic
+│       │   ├── source.py                # Marketplace/source table
+│       │   ├── feed.py                  # Feed definitions and HTTP cache metadata
+│       │   ├── feed_run.py              # Fetch attempts and processing outcomes
+│       │   ├── listing.py               # Canonical listings and raw source payload
+│       │   ├── feed_listing.py          # Per-feed listing appearances and missing counts
+│       │   ├── price_history.py         # Recorded listing price changes
+│       │   ├── watch.py                 # Watch rules and feed associations
+│       │   └── notification.py          # Outbox records and delivery attempts
+│       ├── schemas/
+│       │   ├── __init__.py              # Pydantic schema package marker
+│       │   ├── listing.py               # Listing API responses and filtering inputs
+│       │   ├── feed.py                  # Feed validation and API representations
+│       │   ├── watch.py                 # Validated watch-rule configuration
+│       │   └── ingestion.py             # Source-neutral parsed listing candidate
+│       ├── routers/
+│       │   ├── __init__.py              # FastAPI router package marker
+│       │   ├── health.py                # Health and readiness endpoints
+│       │   └── listings.py              # Read-only listing and detail endpoints
+│       ├── services/
+│       │   ├── __init__.py              # Business service package marker
+│       │   ├── ingestion.py             # Orchestrate feed fetch, parse, and persistence
+│       │   ├── listings.py              # Listing queries and update operations
+│       │   ├── matching.py              # Evaluate watch keywords and price rules
+│       │   ├── lifecycle.py             # Feed observations and verification eligibility
+│       │   └── notifications.py         # Create and dispatch notification intents
+│       ├── sources/
+│       │   ├── __init__.py              # Marketplace adapter package marker
+│       │   ├── base.py                  # Common adapter protocol and normalized output
+│       │   └── hardverapro.py           # HardverApró RSS retrieval and field mapping
+│       └── notifications/
+│           ├── __init__.py              # Notification transport package marker
+│           └── smtp.py                  # Gmail SMTP transport implementation
+├── tests/
+│   ├── conftest.py                      # Shared fixtures and test database setup
+│   ├── fixtures/
+│   │   └── hardverapro.xml              # Saved RSS response for offline tests
+│   ├── unit/                            # Parser, matching, and lifecycle unit tests
+│   └── integration/                     # PostgreSQL, API, and ingestion integration tests
+├── .github/
+│   └── workflows/
+│       ├── ci.yml                       # Ruff and pytest on pushes/PRs
+│       └── ingest.yml                   # Hourly and manually triggered feed ingestion
+└── frontend/                           # React/Vite application (future phase)
+```
+
+**Conventions:** `models/` contains SQLAlchemy persistence models; `schemas/` contains Pydantic contracts. `routers/` only handles HTTP requests and responses; `services/` owns business operations. `sources/` understands marketplace-specific feeds, not database sessions. `notifications/` implements delivery transports; the notification service decides *what* to send. For the MVP, simple SQLAlchemy queries can live in services; introduce a `repositories/` layer only if persistence logic becomes hard to maintain. Avoid circular imports and do not create empty modules solely to match this tree.
+
+## 4. Runtime boundaries
+
+```text
+GitHub Actions / local CLI
+           |
+           v
+     ingestion service <---- source adapter (HardverApró RSS)
+           |
+           v
+    PostgreSQL database
+           |
+       +---+----------------+
+       |                    |
+  matching service     listing service <--- FastAPI routers
+       |
+ notification service ---> SMTP transport
+
+Future: verification worker / Ollama enrichment / React frontend
+```
+
+- FastAPI must **not** need to be running for scheduled ingestion.
+- Both API and CLI import the same settings, SQLAlchemy models, and services.
+- Source adapters return validated, source-neutral candidates and preserve the original feed entry.
+- Services manage transactions; keep HTTP endpoints thin.
+- Do not put email sending inside a database transaction.
+
+## 5. Configuration and watch matching
+
+Store non-secret feed/watch definitions in `config/watches.yaml` (or a private configuration source); load and validate with Pydantic. Example:
 
 ```yaml
 feeds:
   - id: hardverapro-gpus
     source: hardverapro
-    url: https://example.invalid/replace-with-real-rss-url
+    url: https://example.invalid/replace-with-real-feed
 watches:
   - id: rtx-4070-ti-super
     name: RTX 4070 Ti SUPER
@@ -62,235 +161,110 @@ watches:
     feed_ids: [hardverapro-gpus]
     include_all: ["4070", "super"]
     include_any: ["ti", "ti super"]
-    exclude_any: ["wanted", "keresek", "hibás"]
+    exclude_any: ["keresek", "hibás"]
     min_price_huf: null
     max_price_huf: null
 ```
 
-**Matching contract:** Normalize Unicode/case and whitespace. Apply `include_all` (AND), `include_any` (OR), and `exclude_any` (NOT) to a documented searchable text composed of title plus available summary. If a price threshold exists but price cannot be parsed confidently, mark the match `indeterminate` and do not send a price-qualified alert until it can be resolved. These are textual filters, not guaranteed product identification: `4070` + `super` may still yield false positives. Log match reasons for troubleshooting.
+`include_all` uses AND, `include_any` uses OR, and `exclude_any` uses NOT. Match normalized Unicode/case/whitespace against title plus available summary. If a required price bound cannot be evaluated, return `indeterminate`, not a positive match. Store match reasons. Deduplicate notification intents by `(listing_id, watch_id)` for the new-match alert type. First ingestion defaults to **baseline mode**: existing entries are saved without a flood of emails; make initial alerts explicitly opt-in.
 
-A listing may match multiple watches. Deduplicate by `(listing_id, watch_id)`; whether to consolidate multiple matching watches into one email is a later enhancement.
+## 6. Ingestion contract
 
-## 4. Ingestion contract
+1. Load settings and validated watch configuration.
+2. Fetch feeds with bounded timeouts/retries, descriptive User-Agent, and `ETag`/`Last-Modified` when supported.
+3. Record feed-run status and parse errors; treat `304 Not Modified` as unchanged, **not** an empty feed.
+4. Parse each item into a source-neutral Pydantic candidate, retaining all available raw fields.
+5. Upsert by `(source_id, external_id)` where stable, otherwise by a documented canonical URL fallback.
+6. Update first/last seen timestamps and feed membership; append price history **only on change**.
+7. Evaluate watches and persist unique notification intents in a durable outbox.
+8. Dispatch pending notifications, recording attempts, success, and errors.
+9. Apply absence counters only when a feed-specific completeness policy permits them.
+10. Log counts for fetched, created, updated, matched, notified, and failed records.
 
-1. Load validated configuration and connect to PostgreSQL.
-2. Fetch each RSS feed with a timeout, descriptive User-Agent, conditional HTTP headers (`ETag`, `Last-Modified`) when supported, and bounded retries/backoff.
-3. Validate HTTP status and parse the feed. A `304 Not Modified` is a successful no-change result, **not** an empty feed.
-4. Save a `feed_run` record with timing, HTTP status, parse status, item count, and error details.
-5. Convert each item into a source-neutral `ListingCandidate`, preserving original source fields in JSONB and optionally bounded raw entry content.
-6. Upsert listings using source-specific identity; update `last_seen_at` and record feed membership observations.
-7. Append price history only when the normalized price changes. Preserve original price text and currency.
-8. Evaluate enabled watches and create unique notification intents for newly observed matches.
-9. Send pending emails and record attempts, delivery state, and failure reasons.
-10. Update absence counters **only if the feed run is eligible for absence inference** (see lifecycle section).
-11. Emit structured logs and a summary of fetched, new, updated, matched, notified, and failed items.
+The same input replayed twice must not duplicate listings, unchanged prices, or notification intents. A failed or malformed fetch must not affect listing archival status. SMTP cannot guarantee exactly-once delivery after a crash; an outbox reduces duplicates but rare repeats remain possible.
 
-A run must be idempotent: replaying the same feed must not create duplicate listings, price-history entries, or notification intents.
+## 7. Data model (proposed)
 
-### Feed completeness caveat
+| Table | Purpose / key fields |
+|---|---|
+| `sources` | Marketplace identity; unique slug |
+| `feeds` | RSS URLs, source, enabled flag, ETag, last-modified, completeness policy |
+| `feed_runs` | Fetch/parse results, timestamps, HTTP status, item count, errors |
+| `listings` | Source identity, URL, title, price, currency, raw JSONB, timestamps, verified status |
+| `feed_listings` | Unique `(feed_id, listing_id)`, first/last observation, eligible miss count |
+| `price_history` | Listing, price, currency, original price text, observed timestamp |
+| `watches` | Stable watch IDs, rule JSON, enabled state |
+| `watch_feeds` | Watch-to-feed associations |
+| `notification_outbox` | Unique new-match notification intent, state, timestamps, last error |
+| `notification_attempts` | Auditable SMTP delivery attempts |
+| `listing_verifications` | Future page checks and evidence, separate from feed observations |
 
-A successful RSS response is **not automatically a complete catalog**. A feed with a fixed number of newest items can omit older active listings. Therefore, missing from RSS must never by itself imply inactive. Eligibility for absence counting should require an explicit feed-specific policy, not just HTTP 200. For a rolling/latest-items feed, track `last_observed_in_feed_at` but do not automatically increase an archival confidence score from absence alone.
+Use UTC timestamps, integer HUF values, uniqueness constraints, and Alembic migrations from the beginning. Store source-specific raw data in JSONB without forcing every feed field into a relational column. Keep retention and backups in mind for the free database tier.
 
-## 5. Listing lifecycle and archival verification
+## 8. Listing lifecycle: observation is not verification
 
-Keep **two separate dimensions**:
+A rolling RSS feed may stop showing a listing even when it is still available. Keep two separate dimensions:
 
-- **Feed observation:** `seen_this_run`, `last_seen_at`, `consecutive_eligible_misses` per `(feed_id, listing_id)`.
-- **Verified listing status:** `unknown`, `active`, `inactive`, `verification_pending`, `verification_failed`, with status evidence and timestamps. `inactive` must be supported by an explicit site status or sufficiently reliable page evidence, not feed absence.
+- **Feed observation:** last observed, per-feed consecutive eligible misses, and observation evidence.
+- **Verified listing status:** `unknown`, `active`, `inactive`, `verification_pending`, or `verification_failed`, with evidence and verification timestamp.
 
-Suggested state flow for feeds whose completeness policy allows absence tracking:
+For a feed explicitly verified to be sufficiently complete, the *candidate* sequence may be `observed -> missed once -> missed twice -> verification pending`. For rolling feeds, **do not count feed disappearance as archival evidence**. Later, a bounded and permitted page check can identify explicit active/sold/archived signals. `403`, CAPTCHA, and timeouts are inconclusive; a `404` is evidence of unavailability, not automatically proof of a sale. Listings can become active again.
 
-```text
-Observed in eligible feed run
-  -> missed 1 eligible run
-  -> missed 2 eligible runs
-  -> verification_pending
-       -> page explicitly active   -> active (reset/retain feed-miss evidence)
-       -> page explicitly inactive -> inactive
-       -> timeout/403/ambiguous   -> verification_failed / unknown; retry later
-```
+**MVP:** store observations and design the policy field. **Later:** implement page verification and progressive archival decisions after examining real HardverApró behavior.
 
-For **rolling RSS feeds**, bypass the automatic `missed 1 / missed 2` inference; disappearance is expected and is not evidence of archival. Verification candidates can instead be selected by age, explicit feed signals, or a separately defined periodic sampling policy.
+## 9. API requirements
 
-Page verification is **post-MVP** and must be rate-limited and compliant with the source's published rules. A 404 can indicate removal but should be stored as a specific verification signal; 403, CAPTCHA, redirects, and temporary failures are not proof of inactivity. An explicit sold/archived badge is stronger evidence. Preserve `status_reason`, `verification_method`, `verified_at`, and optionally response fingerprint. Reactivation must be possible if later evidence shows an active listing.
+Start with a small, testable FastAPI application:
 
-## 6. Proposed data model
+| Endpoint | Initial behavior |
+|---|---|
+| `GET /health` | Process liveness; no database dependency |
+| `GET /ready` | Check database connectivity; return failure if unavailable |
+| `GET /listings` | Paginated, read-only listing results; filters can grow later |
+| `GET /listings/{listing_id}` | Listing detail or 404 |
 
-| Entity | Important fields | Constraints / notes |
-|---|---|---|
-| `sources` | id, slug, name | Unique slug |
-| `feeds` | id, source_id, url, enabled, etag, last_modified, completeness_policy | Unique normalized feed identity |
-| `feed_runs` | id, feed_id, started_at, finished_at, outcome, http_status, item_count, error | Append-only run history; retention policy needed |
-| `listings` | id, source_id, external_id, canonical_url, title, summary, seller, location, raw_payload JSONB, first_seen_at, last_seen_at, verified_status, status_reason | Unique `(source_id, external_id)` when known; canonical URL fallback |
-| `feed_listings` | feed_id, listing_id, first_seen_at, last_seen_at, consecutive_eligible_misses | Unique `(feed_id, listing_id)` |
-| `listing_observations` | id, listing_id, feed_run_id, observed_at, payload_hash | Optional bounded history; avoid unbounded duplicate payloads |
-| `price_history` | id, listing_id, observed_at, price_amount, currency, original_price_text | Store changes, not every unchanged poll |
-| `watches` | id, name, enabled, rule_json, created_at | Configuration synchronized from YAML |
-| `watch_feeds` | watch_id, feed_id | Many-to-many |
-| `notification_outbox` | id, listing_id, watch_id, created_at, state, sent_at, last_error | Unique `(listing_id, watch_id)` for new-match alerts |
-| `notification_attempts` | id, notification_id, attempted_at, result, error | Auditable retries |
-| `listing_verifications` | id, listing_id, checked_at, method, evidence, result | Post-MVP |
+Use Pydantic response schemas rather than exposing ORM entities directly. Keep router handlers thin and place query/pagination behavior in `services/listings.py`. Watch-management APIs, authentication, and public deployment are later decisions.
 
-Store timestamps in UTC. Use integer HUF amounts rather than floating-point currency values. Apply indexes to external IDs, canonical URLs, watch matches, and recent listing timestamps. Use migrations from day one.
+## 10. Local development and deployment
 
-**Important email limitation:** SMTP plus a database cannot guarantee exactly-once delivery. A process can send successfully and crash before recording `sent_at`. Use a durable outbox, retry limits, and deduplication keys to achieve practical at-least-once delivery with rare duplicate risk. Never mark an email sent before SMTP success.
+**Prerequisites:** `uv`, Docker Engine + Compose, a compatible Python version. Run PostgreSQL locally with `docker compose up -d`, install dependencies with `uv sync`, and apply migrations with `uv run alembic upgrade head`. Configure `.env` from `.env.example` (never commit `.env`). Document the actual app and CLI entrypoints in `pyproject.toml` before advertising commands as ready.
 
-## 7. Deployment and operations
+For production ingestion, GitHub Actions runs the CLI on an hourly best-effort schedule (for example `17 * * * *`) and supports `workflow_dispatch`. Use concurrency protection, GitHub secrets for PostgreSQL/SMTP credentials, and separate CI checks. Use Neon or another free PostgreSQL host only after verifying current limits and connection behavior. No paid infrastructure is required by design; free-tier limits must be monitored.
 
-- `ingest` is a CLI command that works both locally and in CI.
-- GitHub Actions runs hourly at an off-peak minute, e.g. `17 * * * *`, and supports `workflow_dispatch` for manual runs.
-- Use `concurrency` to avoid overlapping production ingestion runs. Database uniqueness constraints remain mandatory.
-- Store `DATABASE_URL`, SMTP username/app password, sender, and recipient secrets in GitHub Actions secrets; use local `.env` ignored by Git.
-- Run Ruff and pytest on pull requests separately from the scheduled ingestion workflow.
-- Log failures clearly; a failed feed must not trigger archival transitions.
-- GitHub Actions scheduled jobs may be delayed or skipped; an hourly cron is **best-effort**, not a delivery SLA. Public-repository schedules can be disabled after prolonged inactivity.
-- Track database size and add a retention policy for old `feed_runs` and duplicate raw observations before approaching free-tier quotas.
-- Keep a documented PostgreSQL export/restore procedure; free plans may not include managed backups.
+## 11. Testing and acceptance criteria
 
-### Email transport
+- [ ] RSS fixture is saved from a real HardverApró feed; identifiers, feed length, and fields are documented.
+- [ ] Parser validates and preserves source fields without requiring live network access in tests.
+- [ ] Docker PostgreSQL, SQLAlchemy models, and Alembic migrations work locally.
+- [ ] FastAPI `/health`, `/ready`, and listing endpoints have tests.
+- [ ] Ingesting the same feed twice creates no duplicate listings or price changes.
+- [ ] Multiple feeds can reference the same canonical listing when identity is stable.
+- [ ] Keyword/price rules handle exclusions, Unicode, and missing prices.
+- [ ] A newly matched listing creates one durable notification intent.
+- [ ] SMTP failure remains retryable and is recorded; tests use a fake transport.
+- [ ] Feed errors and `304` never trigger false archival transitions.
+- [ ] Local CLI and GitHub Actions invoke the same ingestion service.
+- [ ] Ruff, pytest, and migration/integration checks pass in CI.
 
-Start with Gmail SMTP using TLS and an app password, assuming the sending Google account supports app passwords. Secrets must never appear in logs. Use `EmailMessage`, include listing title, price, direct URL, matched watch, and observed time. Treat rate limits and SMTP failures as retryable where appropriate. Do not add `yagmail` unless it solves a demonstrated need.
+## 12. Roadmap
 
-### Docker
+1. **Foundation (current):** FastAPI skeleton, `routers/`, `services/`, `schemas/`, `models/`, database connection, Docker PostgreSQL, Alembic, and health endpoints.
+2. **RSS vertical slice:** HardverApró adapter, offline fixtures, candidate schema, feed/listing persistence, and idempotent CLI ingestion.
+3. **Monitoring MVP:** Watch configuration, matching, notification outbox, Gmail SMTP, and hourly GitHub Actions.
+4. **Lifecycle:** Feed completeness investigation, per-feed observation counters, cautious verification queue, page status evidence where permitted, and price-drop alerts.
+5. **Catalog/enrichment:** More GPU/laptop feeds, permitted full-page extraction, Ollama + Pydantic hardware specs, model/version metadata, and re-enrichment.
+6. **Frontend:** React/TypeScript/Vite listing grid, search/filter/sort, listing detail, seller/source metadata, and price history.
+7. **Additional marketplaces:** New source adapters, source-specific rate limits, and cross-source deduplication policies.
 
-Docker is **optional in MVP**. A small `compose.yaml` for local PostgreSQL is helpful for repeatable integration tests and migrations, while GitHub Actions can run Python directly via `uv`. Containerize the API and enrichment worker later if deployment warrants it.
+## 13. Open decisions
 
-## 8. Repository layout (target)
+- Validate HardverApró RSS URL formats, field coverage, identifier stability, rolling-window size, and access policy.
+- Confirm Neon free-plan limits and whether local/CI connections require pooled or direct URLs.
+- Decide where private watch definitions live and how updates are synchronized to the database.
+- Define behavior when an existing listing starts matching after a price or watch-rule change.
+- Decide retention limits for raw payloads and run logs, plus backup/export cadence.
+- Defer authentication, frontend hosting, and public API access until needed.
 
-```text
-product-finder/
-├── README.md
-├── pyproject.toml
-├── uv.lock
-├── .python-version
-├── .env.example
-├── config/
-│   └── watches.example.yaml
-├── src/product_finder/
-│   ├── cli.py
-│   ├── settings.py
-│   ├── domain/
-│   │   ├── models.py
-│   │   └── matching.py
-│   ├── sources/
-│   │   ├── base.py
-│   │   └── hardverapro.py
-│   ├── ingestion/
-│   │   ├── service.py
-│   │   └── lifecycle.py
-│   ├── persistence/
-│   │   ├── models.py
-│   │   └── repositories.py
-│   └── notifications/
-│       ├── email.py
-│       └── outbox.py
-├── migrations/
-├── tests/
-│   ├── fixtures/
-│   ├── unit/
-│   └── integration/
-├── .github/workflows/
-│   ├── ci.yml
-│   └── ingest.yml
-└── frontend/                 # post-MVP
-```
+## 14. Engineering principles
 
-Avoid creating empty packages solely for speculative features. Add directories when implementation starts.
-
-## 9. MVP acceptance criteria
-
-- [ ] Real HardverApró RSS sample inspected and parser fixtures saved.
-- [ ] Multiple feeds and watches load from validated configuration.
-- [ ] One CLI command fetches feeds and persists entries to PostgreSQL.
-- [ ] Same listing across repeated runs is represented once.
-- [ ] Same listing in multiple feeds is represented once when stable identity is available.
-- [ ] Raw source fields are retained and normalized fields are queryable.
-- [ ] New matching listing creates one notification intent.
-- [ ] A successful email records its delivery; failed email remains retryable.
-- [ ] Re-running identical input does not generate another notification intent.
-- [ ] Price changes are stored as history without duplicating unchanged prices.
-- [ ] Invalid/failed/304 feed responses cannot mark listings inactive.
-- [ ] Feed absence alone cannot set `verified_status=inactive`.
-- [ ] CI passes Ruff, pytest, and migration/integration checks.
-- [ ] GitHub Actions supports hourly schedule and manual trigger.
-- [ ] Secrets are externalized; setup instructions permit local reproduction.
-
-## 10. Roadmap
-
-### Phase 0 — Feed discovery and feasibility
-
-- Obtain real HardverApró RSS examples for GPU searches.
-- Inspect GUID stability, publication dates, available fields, price formatting, feed size, and update behavior.
-- Check published access requirements and feed usage limits.
-- Test hosted PostgreSQL connection from GitHub Actions.
-
-### Phase 1 — Working MVP
-
-- Create Python project and quality tooling.
-- Implement source adapter and RSS parsing.
-- Implement database schema and Alembic migrations.
-- Implement watch configuration and deterministic matching.
-- Implement transactional notification outbox and Gmail SMTP.
-- Deploy scheduled ingestion to GitHub Actions.
-- Test replay, retry, malformed feed, price-change, and duplicate cases.
-
-### Phase 2 — Lifecycle and full-page verification
-
-- Add bounded, rate-limited page fetching where permitted.
-- Parse listing-specific status indicators and record evidence.
-- Implement progressive verification queue and recovery/reactivation logic.
-- Add price-drop alerts as a separate notification type.
-
-### Phase 3 — Catalog and AI enrichment
-
-- Broaden ingestion to GPU and laptop feeds/categories.
-- Fetch detailed listing pages where allowed and store original descriptions.
-- Extract CPU, GPU, RAM, storage, display, and other hardware attributes via Ollama.
-- Validate with Pydantic and preserve model version, raw output, confidence/validation failures, and reprocessing status.
-- Support re-enrichment without rescraping.
-
-### Phase 4 — API and frontend
-
-- FastAPI paginated/filterable listing API.
-- React/TypeScript/Vite grid view: search, filters, sorting, source, price, freshness, status.
-- Listing detail view: original description, parsed specifications, seller/source metadata, price history, direct source link.
-- Decide authentication and hosting only when a public deployment is in scope.
-
-### Phase 5 — Multiple marketplaces
-
-- Add new adapters behind the same normalized listing contract.
-- Define cross-source identity/deduplication policy.
-- Add source-specific rate limits, field mappings, and health metrics.
-
-## 11. Testing strategy
-
-- **Unit:** text normalization, AND/OR/exclusion rules, HUF price parsing, source identity, lifecycle state transitions.
-- **Fixture-based:** saved RSS XML for normal, malformed, empty, reordered, and changed entries.
-- **Integration:** PostgreSQL schema, unique constraints, idempotent upserts, outbox transactions, concurrent runs.
-- **Email:** fake SMTP transport; no real messages in CI.
-- **Failure cases:** timeout, 403/429, 304, invalid XML, partial response, DB failure, SMTP timeout, crash after SMTP acceptance.
-- **End-to-end smoke:** one local ingestion using a fixture feed and disposable PostgreSQL database.
-
-## 12. Decisions still to validate
-
-1. **Real feed contract:** HardverApró RSS URLs, field coverage, stable identifiers, and feed window size must be tested against actual samples.
-2. **Provider:** Neon is the initial preference; confirm account-specific free limits, networking, and inactivity behavior before committing.
-3. **Watch configuration:** Decide whether watch YAML lives in the repository or is supplied as a private Actions secret; public config may reveal shopping preferences.
-4. **Price matching:** Determine what to do when price is absent, negotiable, or ambiguously formatted.
-5. **Initial run:** Default to *baseline mode* (save existing listings without emailing for all of them), with an explicit option to alert on initial matches.
-6. **Email recipients:** MVP assumes one recipient, configured via secret; multi-recipient support is later.
-7. **Feed absence:** Establish per-feed completeness policy; rolling feeds do not support reliable archival inference.
-8. **Storage budget:** Define raw-payload size limits, run-log retention, and backup cadence to stay within free quotas.
-9. **Notification semantics:** New-match-only for MVP; if an old listing begins matching after a price edit or watch-rule change, define whether that is a new alert-worthy event.
-10. **Frontend hosting and access:** Deferred until Phase 4.
-
-## 13. Development principles
-
-- Prefer RSS and published APIs over brittle scraping.
-- Keep source-specific parsing out of domain and persistence code.
-- Preserve raw evidence; normalized and enriched data are derived.
-- Treat missing information as unknown, not false.
-- Make operations idempotent and errors observable.
-- Use explicit migrations and tests instead of hand-editing production tables.
-- Keep the MVP small; design interfaces for future growth without implementing unused abstractions.
-- Prefer free, replaceable services and avoid vendor-specific database APIs.
+Keep marketplace adapters isolated. Keep HTTP concerns out of business services. Preserve raw evidence before normalization or enrichment. Prefer idempotent operations and explicit transactions. Treat missing information as unknown. Use migrations, tests, and structured logs. Implement only the abstractions needed for the current milestone while keeping the architecture easy to extend.
