@@ -158,7 +158,7 @@ Docker is **optional in MVP**. A small `compose.yaml` for local PostgreSQL is he
 ## 8. Repository layout (target)
 
 ```text
-product-finder/
+listinglens/
 ├── README.md
 ├── pyproject.toml
 ├── uv.lock
@@ -166,7 +166,7 @@ product-finder/
 ├── .env.example
 ├── config/
 │   └── watches.example.yaml
-├── src/product_finder/
+├── src/listinglens/
 │   ├── cli.py
 │   ├── settings.py
 │   ├── domain/
