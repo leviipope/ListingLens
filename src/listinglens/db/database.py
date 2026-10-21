@@ -18,7 +18,7 @@ engine = create_engine(
     settings.database_url,
     connect_args=_connect_args(settings.database_url),
 )
-SessionLocal = sessionmaker(bind=engine, autoFlush=False, autocommit=False)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 def get_db() -> Generator[Session]:

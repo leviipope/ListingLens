@@ -1,8 +1,9 @@
 from typing import Annotated
 
 from fastapi import Depends
-from sqlalchemy import SQLAlchemyError, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import text
 
 from listinglens.db.database import get_db
 
