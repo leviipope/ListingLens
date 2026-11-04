@@ -7,8 +7,14 @@ requires-python = ">=3.14.7"
 dependencies = [
     "alembic>=1.20.0",
     "fastapi>=0.155.0",
+    "feedparser>=6.0.14",
+    "httpx>=0.28.1",
+    "psycopg[binary]>=3.3.6",
     "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.1",
+    "scrapy>=2.19.0",
     "sqlalchemy>=2.1.5",
+    "uvicorn>=0.54.0",
 ]
 
 [project.scripts]
@@ -22,4 +28,12 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.1.1",
     "ruff>=0.17.1",
+]
+
+[tool.ruff]
+lint.extend-select = [
+    "FAST", # FastAPI
+    "N", # PEP8 Naming
+    "I", # Isort
+    "W292", # Missing newline at EOF
 ]
