@@ -11,3 +11,6 @@ wheels/
 
 # Environment variables
 .env
+
+# Spider generated files
+src/scraper/data*.json

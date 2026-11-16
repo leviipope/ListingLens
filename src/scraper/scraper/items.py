@@ -24,7 +24,7 @@ class ProductItem:
     currency: str | None = None
 
     # Seller information
-    seller: str | None = None
+    seller_name: str | None = None
     seller_rating: str | None = None
     seller_profile_url: str | None = None
     location: str | None = None
